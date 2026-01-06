@@ -22,26 +22,42 @@ const NotificationType = {
  * Bildirim mesajlarını oluştur
  */
 function createNotificationMessage(notificationData) {
-  const {type, title, body, businessName, amount} = notificationData;
+  const {type, title, body, businessName, amount, items} = notificationData;
 
   let notificationTitle = title || "Bildirim";
   let notificationBody = body || "";
 
   // Bildirim tipine göre özel mesajlar
   switch (type) {
-    case NotificationType.ORDER_APPROVED:
-      notificationTitle = "Siparişiniz Onaylandı";
-      notificationBody = businessName
-        ? `${businessName} siparişinizi onayladı.`
-        : "Siparişiniz onaylandı.";
-      break;
+    case NotificationType.ORDER_APPROVED: {
+      // Başlık: "İşletme Adı - Siparişi Onayladı."
+      notificationTitle = businessName
+        ? `${businessName} - Siparişi Onayladı.`
+        : "Siparişi Onayladı.";
 
-    case NotificationType.ORDER_CANCELLED:
-      notificationTitle = "Siparişiniz İptal Edildi";
-      notificationBody = businessName
-        ? `${businessName} siparişinizi iptal etti.`
-        : "Siparişiniz iptal edildi.";
+      // Detay: Sipariş kalemleri
+      if (items && Array.isArray(items) && items.length > 0) {
+        notificationBody = items.map((item) => `${item.quantity} X ${item.name}`).join("\n");
+      } else {
+        notificationBody = "Siparişiniz onaylandı.";
+      }
       break;
+    }
+
+    case NotificationType.ORDER_CANCELLED: {
+      // Başlık: "İşletme Adı - Siparişi İptal Etti."
+      notificationTitle = businessName
+        ? `${businessName} - Siparişi İptal Etti.`
+        : "Siparişi İptal Etti.";
+
+      // Detay: Sipariş kalemleri
+      if (items && Array.isArray(items) && items.length > 0) {
+        notificationBody = items.map((item) => `${item.quantity} X ${item.name}`).join("\n");
+      } else {
+        notificationBody = "Siparişiniz iptal edildi.";
+      }
+      break;
+    }
 
     case NotificationType.BALANCE_ADDED:
       notificationTitle = "Bakiye Eklendi";
@@ -89,16 +105,24 @@ function createNotificationMessage(notificationData) {
       notificationTitle = "Yeni Sipariş";
       const customerName = notificationData.customerName || "";
       const totalPrice = notificationData.totalPrice;
+      const items = notificationData.items || [];
+
+      let itemsText = "";
+      if (items && items.length > 0) {
+        itemsText = items.map((item) => `${item.quantity} X ${item.name}`).join("\n");
+      }
+
+      let priceText = "";
       if (totalPrice !== undefined && totalPrice !== null) {
         const formattedPrice = totalPrice.toFixed(2);
-        notificationBody = customerName
-          ? `${customerName} yeni bir sipariş verdi (₺${formattedPrice})`
-          : `Yeni bir sipariş alındı (₺${formattedPrice})`;
-      } else {
-        notificationBody = customerName
-          ? `${customerName} yeni bir sipariş verdi`
-          : "Yeni bir sipariş alındı";
+        priceText = `(₺${formattedPrice})`;
       }
+
+      const headerText = customerName
+        ? `${customerName} yeni bir sipariş verdi ${priceText}`
+        : `Yeni bir sipariş alındı ${priceText}`;
+
+      notificationBody = itemsText ? `${itemsText}\n\n${headerText}` : headerText;
       break;
     }
 
@@ -140,8 +164,9 @@ async function getCustomerFcmToken(customerId) {
     const userData = userDoc.data();
     const fcmToken = userData && userData.fcmToken ? userData.fcmToken : null;
 
-    if (!fcmToken) {
-      console.warn(`⚠️ FCM Token bulunamadı: ${customerId}`);
+    // Boş string veya null kontrolü
+    if (!fcmToken || fcmToken.trim() === "") {
+      console.warn(`⚠️ FCM Token bulunamadı veya boş: ${customerId}`);
       return null;
     }
 
@@ -170,8 +195,9 @@ async function getBusinessFcmToken(businessId) {
     const userData = userDoc.data();
     const fcmToken = userData && userData.fcmToken ? userData.fcmToken : null;
 
-    if (!fcmToken) {
-      console.warn(`⚠️ İşletme FCM Token bulunamadı: ${businessId}`);
+    // Boş string veya null kontrolü
+    if (!fcmToken || fcmToken.trim() === "") {
+      console.warn(`⚠️ İşletme FCM Token bulunamadı veya boş: ${businessId}`);
       return null;
     }
 
@@ -305,6 +331,7 @@ exports.sendNotificationToCustomer = functions.firestore
         orderId: notificationData.orderId || null,
         amount: notificationData.amount || null,
         businessName: notificationData.businessName || null,
+        items: notificationData.items || null, // Sipariş kalemleri
       };
       console.log(`📦 Bildirim payload hazırlandı:`, JSON.stringify(notificationPayload, null, 2));
 
@@ -367,6 +394,9 @@ exports.sendNewOrderNotificationToBusiness = functions.firestore
       // Toplam fiyat
       const totalPrice = orderData.totalPrice || 0;
 
+      // Sipariş kalemleri
+      const items = orderData.items || [];
+
       // Bildirim verisini hazırla
       const notificationPayload = {
         type: NotificationType.NEW_ORDER,
@@ -375,6 +405,7 @@ exports.sendNewOrderNotificationToBusiness = functions.firestore
         orderId: orderId,
         customerName: customerName,
         totalPrice: totalPrice,
+        items: items,
       };
       console.log(`📦 Bildirim payload hazırlandı:`, JSON.stringify(notificationPayload, null, 2));
 
