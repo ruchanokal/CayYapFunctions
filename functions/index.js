@@ -102,27 +102,25 @@ function createNotificationMessage(notificationData) {
       break;
 
     case NotificationType.NEW_ORDER: {
-      notificationTitle = "Yeni Sipariş";
       const customerName = notificationData.customerName || "";
-      const totalPrice = notificationData.totalPrice;
+      const customerCompany = notificationData.customerCompany || "";
       const items = notificationData.items || [];
 
-      let itemsText = "";
+      // Başlık: {müşterinin çalıştığı yer}\n{müşteri adı soyadı}
+      if (customerCompany && customerName) {
+        notificationTitle = `${customerCompany}\n${customerName}`;
+      } else if (customerName) {
+        notificationTitle = customerName;
+      } else {
+        notificationTitle = "Yeni Sipariş";
+      }
+
+      // Detay: Sadece ürünler listesi
       if (items && items.length > 0) {
-        itemsText = items.map((item) => `${item.quantity} X ${item.name}`).join("\n");
+        notificationBody = items.map((item) => `${item.quantity} X ${item.name}`).join("\n");
+      } else {
+        notificationBody = "Yeni bir sipariş alındı";
       }
-
-      let priceText = "";
-      if (totalPrice !== undefined && totalPrice !== null) {
-        const formattedPrice = totalPrice.toFixed(2);
-        priceText = `(₺${formattedPrice})`;
-      }
-
-      const headerText = customerName
-        ? `${customerName} yeni bir sipariş verdi ${priceText}`
-        : `Yeni bir sipariş alındı ${priceText}`;
-
-      notificationBody = itemsText ? `${itemsText}\n\n${headerText}` : headerText;
       break;
     }
 
@@ -209,7 +207,7 @@ async function getBusinessFcmToken(businessId) {
 }
 
 /**
- * Kullanıcı bilgilerini al (ad-soyad)
+ * Kullanıcı bilgilerini al (ad-soyad ve çalıştığı yer)
  */
 async function getUserInfo(userId) {
   try {
@@ -235,34 +233,80 @@ async function getUserInfo(userId) {
 }
 
 /**
+ * İşletmeye bağlı garsonları al
+ */
+async function getStaffByBusinessId(businessId) {
+  try {
+    console.log(`🔍 Garsonlar sorgulanıyor - BusinessId: ${businessId}`);
+    const staffSnapshot = await admin.firestore()
+        .collection("users")
+        .where("userType", "==", "garson")
+        .where("companyId", "==", businessId)
+        .get();
+
+    console.log(`📊 Sorgu sonucu: ${staffSnapshot.size} doküman bulundu`);
+
+    const staffList = [];
+    staffSnapshot.forEach((doc) => {
+      const userData = doc.data();
+      const staffInfo = {
+        id: doc.id,
+        nameSurname: userData && userData.nameSurname ? userData.nameSurname : "",
+        fcmToken: userData && userData.fcmToken ? userData.fcmToken : null,
+        companyId: userData && userData.companyId ? userData.companyId : null,
+        userType: userData && userData.userType ? userData.userType : null,
+      };
+      staffList.push(staffInfo);
+      console.log(`👤 Garson bulundu: ${staffInfo.nameSurname} ` +
+          `(ID: ${staffInfo.id}, CompanyId: ${staffInfo.companyId}, HasToken: ${!!staffInfo.fcmToken})`);
+    });
+
+    console.log(`👥 Toplam ${staffList.length} garson bulundu (BusinessId: ${businessId})`);
+    return staffList;
+  } catch (error) {
+    console.error(`❌ Garsonlar alma hatası: ${error.message}`);
+    console.error(`❌ Stack trace:`, error.stack);
+    return [];
+  }
+}
+
+/**
  * FCM push notification gönder
  */
 async function sendFcmNotification(fcmToken, notificationData) {
   try {
     const message = createNotificationMessage(notificationData);
+    const notificationType = notificationData.type || "";
+
+    // NEW_ORDER tipi bildirimler için sadece data payload gönder
+    // Böylece onMessageReceived her zaman çağrılır (foreground ve background)
+    // ve gürültülü bildirim çalışır
+    const isNewOrder = notificationType === NotificationType.NEW_ORDER;
+
+    // Data payload'ı hazırla (tüm bildirimler için)
+    const dataPayload = {
+      type: notificationType,
+      title: message.title,
+      body: message.body,
+      customerId: notificationData.customerId || "",
+      businessId: notificationData.businessId || "",
+      orderId: notificationData.orderId || "",
+      businessName: notificationData.businessName || "",
+      customerName: notificationData.customerName || "",
+      amount: (notificationData.amount !== undefined && notificationData.amount !== null) ? notificationData.amount.toString() : "",
+      totalPrice: (notificationData.totalPrice !== undefined && notificationData.totalPrice !== null) ? notificationData.totalPrice.toString() : "",
+    };
+
+    // Items array'ini JSON string olarak ekle (eğer varsa)
+    if (notificationData.items && Array.isArray(notificationData.items)) {
+      dataPayload.items = JSON.stringify(notificationData.items);
+    }
 
     const payload = {
-      notification: {
-        title: message.title,
-        body: message.body,
-      },
-      data: {
-        type: notificationData.type || "",
-        customerId: notificationData.customerId || "",
-        businessId: notificationData.businessId || "",
-        orderId: notificationData.orderId || "",
-        businessName: notificationData.businessName || "",
-        customerName: notificationData.customerName || "",
-        amount: (notificationData.amount !== undefined && notificationData.amount !== null) ? notificationData.amount.toString() : "",
-        totalPrice: (notificationData.totalPrice !== undefined && notificationData.totalPrice !== null) ? notificationData.totalPrice.toString() : "",
-      },
       token: fcmToken,
+      data: dataPayload,
       android: {
         priority: "high",
-        notification: {
-          channelId: "cayyap_notifications",
-          sound: "default",
-        },
       },
       apns: {
         payload: {
@@ -273,6 +317,19 @@ async function sendFcmNotification(fcmToken, notificationData) {
         },
       },
     };
+
+    // NEW_ORDER için sadece data payload gönder (notification payload yok)
+    // Diğer bildirimler için hem notification hem data payload gönder
+    if (!isNewOrder) {
+      payload.notification = {
+        title: message.title,
+        body: message.body,
+      };
+      payload.android.notification = {
+        channelId: "cayyap_notifications",
+        sound: "default",
+      };
+    }
 
     const response = await admin.messaging().send(payload);
     console.log(`✅ Bildirim başarıyla gönderildi: ${response}`);
@@ -381,15 +438,8 @@ exports.sendNewOrderNotificationToBusiness = functions.firestore
       console.log(`🔍 Müşteri bilgileri alınıyor...`);
       const customerInfo = await getUserInfo(customerId);
       const customerName = customerInfo ? customerInfo.nameSurname : "";
-
-      // İşletmenin FCM token'ını al
-      console.log(`🔍 İşletme FCM Token alınıyor...`);
-      const fcmToken = await getBusinessFcmToken(businessId);
-      if (!fcmToken) {
-        console.warn(`⚠️ İşletme FCM Token bulunamadı, bildirim gönderilemedi: ${businessId}`);
-        return null;
-      }
-      console.log(`✅ İşletme FCM Token bulundu: ${fcmToken.substring(0, 20)}...`);
+      const customerCompany = customerInfo ? customerInfo.company : "";
+      console.log(`👤 Müşteri: ${customerName}, Çalıştığı Yer: ${customerCompany}`);
 
       // Toplam fiyat
       const totalPrice = orderData.totalPrice || 0;
@@ -404,22 +454,82 @@ exports.sendNewOrderNotificationToBusiness = functions.firestore
         businessId: businessId,
         orderId: orderId,
         customerName: customerName,
+        customerCompany: customerCompany,
         totalPrice: totalPrice,
         items: items,
       };
       console.log(`📦 Bildirim payload hazırlandı:`, JSON.stringify(notificationPayload, null, 2));
 
-      // FCM push notification gönder
-      console.log(`📤 FCM bildirimi gönderiliyor...`);
-      const result = await sendFcmNotification(fcmToken, notificationPayload);
+      // İşletmenin FCM token'ını al ve bildirim gönder
+      console.log(`🔍 İşletme FCM Token alınıyor...`);
+      const fcmToken = await getBusinessFcmToken(businessId);
+      let businessResult = null;
+      if (fcmToken) {
+        console.log(`✅ İşletme FCM Token bulundu: ${fcmToken.substring(0, 20)}...`);
+        console.log(`📤 FCM bildirimi gönderiliyor (işletmeye)...`);
+        console.log(`📦 İşletmeye gönderilen payload:`, JSON.stringify(notificationPayload, null, 2));
+        businessResult = await sendFcmNotification(fcmToken, notificationPayload);
+        const businessMessage = createNotificationMessage(notificationPayload);
+        console.log(`📝 İşletmeye gönderilen mesaj - Title: "${businessMessage.title}", Body: "${businessMessage.body}"`);
 
-      if (result.success) {
-        console.log(`✅ Bildirim başarıyla gönderildi - BusinessId: ${businessId}, OrderId: ${orderId}, MessageId: ${result.messageId}`);
+        if (businessResult.success) {
+          console.log(`✅ İşletmeye bildirim başarıyla gönderildi - ` +
+              `BusinessId: ${businessId}, OrderId: ${orderId}, MessageId: ${businessResult.messageId}`);
+        } else {
+          console.error(`❌ İşletmeye bildirim gönderme hatası - BusinessId: ${businessId}, OrderId: ${orderId}, Error: ${businessResult.error}`);
+        }
       } else {
-        console.error(`❌ Bildirim gönderme hatası - BusinessId: ${businessId}, OrderId: ${orderId}, Error: ${result.error}`);
+        console.warn(`⚠️ İşletme FCM Token bulunamadı, işletmeye bildirim gönderilemedi: ${businessId}`);
       }
 
-      return result;
+      // Garsonlara bildirim gönder (işletme token'ı olsun ya da olmasın)
+      console.log(`🔍 Garsonlar alınıyor (BusinessId: ${businessId})...`);
+      const staffList = await getStaffByBusinessId(businessId);
+      console.log(`📊 Garson listesi:`, JSON.stringify(staffList.map((s) => ({
+        id: s.id,
+        name: s.nameSurname,
+        hasToken: !!s.fcmToken,
+      })), null, 2));
+
+      if (staffList.length > 0) {
+        console.log(`👥 ${staffList.length} garson bulundu, bildirim gönderiliyor...`);
+
+        // Her garsona bildirim gönder
+        const staffNotificationPromises = staffList.map(async (staff) => {
+          if (!staff.fcmToken || staff.fcmToken.trim() === "") {
+            console.warn(`⚠️ Garson FCM Token bulunamadı: ${staff.id} (${staff.nameSurname})`);
+            return null;
+          }
+
+          console.log(`📤 Garsona bildirim gönderiliyor: ${staff.nameSurname} ` +
+              `(${staff.id}), Token: ${staff.fcmToken.substring(0, 20)}...`);
+          console.log(`📦 Garsona gönderilen payload:`, JSON.stringify(notificationPayload, null, 2));
+          const staffResult = await sendFcmNotification(staff.fcmToken, notificationPayload);
+          const staffMessage = createNotificationMessage(notificationPayload);
+          console.log(`📝 Garsona gönderilen mesaj - Title: "${staffMessage.title}", Body: "${staffMessage.body}"`);
+
+          if (staffResult.success) {
+            console.log(`✅ Garsona bildirim gönderildi - StaffId: ${staff.id}, Name: ${staff.nameSurname}, MessageId: ${staffResult.messageId}`);
+          } else {
+            console.error(`❌ Garsona bildirim gönderme hatası - StaffId: ${staff.id}, Name: ${staff.nameSurname}, Error: ${staffResult.error}`);
+          }
+
+          return staffResult;
+        });
+
+        // Tüm garson bildirimlerini bekle
+        const results = await Promise.all(staffNotificationPromises);
+        const successCount = results.filter((r) => r && r.success).length;
+        const failCount = results.filter((r) => r && !r.success).length;
+        const noTokenCount = results.filter((r) => !r).length;
+        console.log(`✅ Tüm garsonlara bildirim gönderme işlemi tamamlandı - ` +
+            `Başarılı: ${successCount}, Başarısız: ${failCount}, Token Yok: ${noTokenCount}`);
+      } else {
+        console.log(`ℹ️ Bu işletmeye bağlı garson bulunamadı (BusinessId: ${businessId})`);
+      }
+
+      // İşletme bildirimi başarılı olduysa onu döndür, değilse garson bildirimlerinden birini döndür
+      return businessResult || {success: false, error: "İşletme token bulunamadı"};
     });
 
 /**
