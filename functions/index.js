@@ -19,6 +19,18 @@ const NotificationType = {
 };
 
 /**
+ * Türk Lirası formatı: binler basamağı nokta, ondalık virgül (örn: 1.234,56)
+ */
+function formatCurrencyTR(value) {
+  const num = Number(value);
+  if (isNaN(num)) return "0,00";
+  const fixed = num.toFixed(2);
+  const [intPart, decPart] = fixed.split(".");
+  const withThousands = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${withThousands},${decPart}`;
+}
+
+/**
  * Bildirim mesajlarını oluştur
  */
 function createNotificationMessage(notificationData) {
@@ -62,7 +74,7 @@ function createNotificationMessage(notificationData) {
     case NotificationType.BALANCE_ADDED:
       notificationTitle = "Bakiye Eklendi";
       if (amount !== undefined && amount !== null) {
-        const formattedAmount = amount.toFixed(2);
+        const formattedAmount = formatCurrencyTR(amount);
         notificationBody = businessName
           ? `${businessName} hesabınıza ₺${formattedAmount} bakiye ekledi.`
           : `Hesabınıza ₺${formattedAmount} bakiye eklendi.`;
@@ -76,7 +88,7 @@ function createNotificationMessage(notificationData) {
     case NotificationType.BALANCE_DEDUCTED:
       notificationTitle = "Bakiye Çıkarıldı";
       if (amount !== undefined && amount !== null) {
-        const formattedAmount = amount.toFixed(2);
+        const formattedAmount = formatCurrencyTR(amount);
         notificationBody = businessName
           ? `${businessName} hesabınızdan ₺${formattedAmount} bakiye çıkardı.`
           : `Hesabınızdan ₺${formattedAmount} bakiye çıkarıldı.`;
