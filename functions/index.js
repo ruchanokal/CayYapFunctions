@@ -323,8 +323,13 @@ async function sendFcmNotification(fcmToken, notificationData) {
       apns: {
         payload: {
           aps: {
+            alert: {
+              title: message.title,
+              body: message.body,
+            },
             sound: "default",
             badge: 1,
+            ...(isNewOrder && {"content-available": 1}),
           },
         },
       },
@@ -337,6 +342,12 @@ async function sendFcmNotification(fcmToken, notificationData) {
         title: message.title,
         body: message.body,
       };
+    }
+    // Android notification konfigürasyonu (NEW_ORDER hariç)
+    // NEW_ORDER için android.notification EKLENMEMELİ, yoksa FCM mesajı
+    // notification mesajı gibi davranır ve onMessageReceived çağrılmaz.
+    // Bu durumda sistem tray'i title/body olmadan boş bildirim gösterir.
+    if (!isNewOrder) {
       payload.android.notification = {
         channelId: "cayyap_notifications",
         sound: "default",
