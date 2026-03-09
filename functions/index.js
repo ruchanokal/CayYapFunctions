@@ -1,7 +1,19 @@
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+const {GoogleAuth} = require("google-auth-library");
+const serviceAccount = require("./serviceAccountKey.json");
 
-admin.initializeApp();
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  projectId: serviceAccount.project_id,
+});
+
+// FCM v1 API için explicit auth client
+const fcmAuth = new GoogleAuth({
+  credentials: serviceAccount,
+  scopes: ["https://www.googleapis.com/auth/firebase.messaging"],
+});
+const FCM_URL = `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`;
 
 /**
  * Bildirim tipleri
@@ -321,6 +333,10 @@ async function sendFcmNotification(fcmToken, notificationData) {
         priority: "high",
       },
       apns: {
+        headers: {
+          "apns-priority": "10",
+          "apns-push-type": "alert",
+        },
         payload: {
           aps: {
             alert: {
@@ -354,9 +370,29 @@ async function sendFcmNotification(fcmToken, notificationData) {
       };
     }
 
-    const response = await admin.messaging().send(payload);
-    console.log(`✅ Bildirim başarıyla gönderildi: ${response}`);
-    return {success: true, messageId: response};
+    // FCM v1 API'ye doğrudan HTTP çağrısı
+    const client = await fcmAuth.getClient();
+    const accessToken = await client.getAccessToken();
+    console.log(`🔑 Access token alındı: ${accessToken.token.substring(0, 20)}...`);
+
+    const response = await fetch(FCM_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({message: payload}),
+    });
+
+    const responseData = await response.json();
+
+    if (response.ok) {
+      console.log(`✅ Bildirim başarıyla gönderildi: ${responseData.name}`);
+      return {success: true, messageId: responseData.name};
+    } else {
+      console.error(`❌ FCM API hatası (${response.status}):`, JSON.stringify(responseData));
+      return {success: false, error: responseData.error?.message || JSON.stringify(responseData)};
+    }
   } catch (error) {
     console.error(`❌ FCM bildirim gönderme hatası: ${error.message}`);
     return {success: false, error: error.message};
