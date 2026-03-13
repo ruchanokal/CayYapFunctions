@@ -130,9 +130,9 @@ function createNotificationMessage(notificationData) {
       const customerCompany = notificationData.customerCompany || "";
       const items = notificationData.items || [];
 
-      // Başlık: {müşterinin çalıştığı yer}\n{müşteri adı soyadı}
-      if (customerCompany && customerName) {
-        notificationTitle = `${customerCompany}\n${customerName}`;
+      // Başlık: çalıştığı yer, Alt başlık: müşteri adı soyadı
+      if (customerCompany) {
+        notificationTitle = customerCompany;
       } else if (customerName) {
         notificationTitle = customerName;
       } else {
@@ -145,7 +145,12 @@ function createNotificationMessage(notificationData) {
       } else {
         notificationBody = "Yeni bir sipariş alındı";
       }
-      break;
+
+      return {
+        title: notificationTitle,
+        subtitle: customerCompany && customerName ? customerName : "",
+        body: notificationBody,
+      };
     }
 
     case NotificationType.NEW_CUSTOMER_REQUEST: {
@@ -311,6 +316,7 @@ async function sendFcmNotification(fcmToken, notificationData) {
     const dataPayload = {
       type: notificationType,
       title: message.title,
+      subtitle: message.subtitle || "",
       body: message.body,
       customerId: notificationData.customerId || "",
       businessId: notificationData.businessId || "",
@@ -341,6 +347,7 @@ async function sendFcmNotification(fcmToken, notificationData) {
           aps: {
             alert: {
               title: message.title,
+              ...(message.subtitle && {subtitle: message.subtitle}),
               body: message.body,
             },
             sound: "default",
