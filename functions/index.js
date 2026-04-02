@@ -267,28 +267,35 @@ async function getUserInfo(userId) {
 async function getStaffByBusinessId(businessId) {
   try {
     console.log(`🔍 Garsonlar sorgulanıyor - BusinessId: ${businessId}`);
-    const staffSnapshot = await admin.firestore()
-        .collection("users")
-        .where("userType", "==", "garson")
-        .where("companyId", "==", businessId)
+    // memberships koleksiyonundan garson rolündeki üyelikleri al
+    const membershipSnapshot = await admin.firestore()
+        .collection("memberships")
+        .where("businessId", "==", businessId)
+        .where("role", "==", "garson")
+        .where("status", "in", ["approved", "passive"])
         .get();
 
-    console.log(`📊 Sorgu sonucu: ${staffSnapshot.size} doküman bulundu`);
+    console.log(`📊 Membership sorgu sonucu: ${membershipSnapshot.size} garson üyeliği bulundu`);
 
     const staffList = [];
-    staffSnapshot.forEach((doc) => {
-      const userData = doc.data();
+    for (const doc of membershipSnapshot.docs) {
+      const membership = doc.data();
+      const userId = membership.userId;
+      if (!userId) continue;
+
+      // Kullanıcı dokümanından fcmToken al
+      const userDoc = await admin.firestore().collection("users").doc(userId).get();
+      const userData = userDoc.exists ? userDoc.data() : null;
+
       const staffInfo = {
-        id: doc.id,
-        nameSurname: userData && userData.nameSurname ? userData.nameSurname : "",
+        id: userId,
+        nameSurname: membership.memberName || (userData && userData.nameSurname ? userData.nameSurname : ""),
         fcmToken: userData && userData.fcmToken ? userData.fcmToken : null,
-        companyId: userData && userData.companyId ? userData.companyId : null,
-        userType: userData && userData.userType ? userData.userType : null,
       };
       staffList.push(staffInfo);
       console.log(`👤 Garson bulundu: ${staffInfo.nameSurname} ` +
-          `(ID: ${staffInfo.id}, CompanyId: ${staffInfo.companyId}, HasToken: ${!!staffInfo.fcmToken})`);
-    });
+          `(ID: ${staffInfo.id}, HasToken: ${!!staffInfo.fcmToken})`);
+    }
 
     console.log(`👥 Toplam ${staffList.length} garson bulundu (BusinessId: ${businessId})`);
     return staffList;
@@ -350,9 +357,10 @@ async function sendFcmNotification(fcmToken, notificationData) {
               ...(message.subtitle && {subtitle: message.subtitle}),
               body: message.body,
             },
-            sound: "default",
+            sound: isNewOrder ? "loud_notification_sound.caf" : "default",
             badge: 1,
             ...(isNewOrder && {"content-available": 1}),
+            ...(isNewOrder && {category: "LOUD_NOTIFICATION"}),
           },
         },
       },
@@ -599,37 +607,37 @@ exports.sendNewOrderNotificationToBusiness = functions.firestore
     });
 
 /**
- * Firestore trigger: relations collection'ına yeni doküman eklendiğinde
+ * Firestore trigger: memberships collection'ına yeni doküman eklendiğinde
  * Status "pending" ise işletmeye "Yeni Müşteri İsteği" bildirimi gönder
  */
 exports.sendNewCustomerRequestNotificationToBusiness = functions.firestore
-    .document("relations/{relationId}")
+    .document("memberships/{membershipId}")
     .onCreate(async (snap, context) => {
-      const relationData = snap.data();
-      const relationId = context.params.relationId;
+      const membershipData = snap.data();
+      const membershipId = context.params.membershipId;
 
-      console.log(`🔗 Yeni ilişki oluşturuldu: ${relationId}`);
-      console.log(`📊 İlişki verisi:`, JSON.stringify(relationData, null, 2));
+      console.log(`🔗 Yeni üyelik oluşturuldu: ${membershipId}`);
+      console.log(`📊 Üyelik verisi:`, JSON.stringify(membershipData, null, 2));
 
       // Status kontrolü - sadece "pending" ise bildirim gönder
-      const status = relationData.status;
+      const status = membershipData.status;
       if (status !== "pending") {
-        console.log(`ℹ️ İlişki status'u "pending" değil (${status}), bildirim gönderilmeyecek`);
+        console.log(`ℹ️ Üyelik status'u "pending" değil (${status}), bildirim gönderilmeyecek`);
         return null;
       }
 
       // İşletme ID'sini al
-      const businessId = relationData.businessId;
+      const businessId = membershipData.businessId;
       if (!businessId) {
-        console.warn(`⚠️ İşletme ID'si bulunamadı: ${relationId}`);
+        console.warn(`⚠️ İşletme ID'si bulunamadı: ${membershipId}`);
         return null;
       }
       console.log(`🔍 İşletme ID: ${businessId}`);
 
       // Müşteri ID'sini al
-      const customerId = relationData.customerId;
+      const customerId = membershipData.userId;
       if (!customerId) {
-        console.warn(`⚠️ Müşteri ID'si bulunamadı: ${relationId}`);
+        console.warn(`⚠️ Müşteri ID'si bulunamadı: ${membershipId}`);
         return null;
       }
       console.log(`🔍 Müşteri ID: ${customerId}`);
