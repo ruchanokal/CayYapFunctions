@@ -174,6 +174,25 @@ function createNotificationMessage(notificationData) {
 }
 
 /**
+ * Kullanıcının aktif rolünü al
+ */
+async function getUserActiveRole(userId) {
+  try {
+    const userDoc = await admin.firestore()
+        .collection("users")
+        .doc(userId)
+        .get();
+
+    if (!userDoc.exists) return null;
+    const userData = userDoc.data();
+    return userData && userData.activeRole ? userData.activeRole : null;
+  } catch (error) {
+    console.error(`❌ Aktif rol alma hatası: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Müşterinin FCM token'ını al
  */
 async function getCustomerFcmToken(customerId) {
@@ -443,6 +462,13 @@ exports.sendNotificationToCustomer = functions.firestore
         return null;
       }
 
+      // Kullanıcının aktif rolünü kontrol et — garson/isletme modundaysa müşteri bildirimi gönderme
+      const activeRole = await getUserActiveRole(customerId);
+      if (activeRole && activeRole !== "musteri") {
+        console.log(`ℹ️ Kullanıcı şu anda "${activeRole}" modunda, müşteri bildirimi gönderilmeyecek: ${customerId}`);
+        return null;
+      }
+
       // Müşterinin FCM token'ını al
       console.log(`🔍 FCM Token alınıyor...`);
       const fcmToken = await getCustomerFcmToken(customerId);
@@ -534,11 +560,14 @@ exports.sendNewOrderNotificationToBusiness = functions.firestore
       };
       console.log(`📦 Bildirim payload hazırlandı:`, JSON.stringify(notificationPayload, null, 2));
 
-      // İşletmenin FCM token'ını al ve bildirim gönder
+      // İşletmenin FCM token'ını al ve bildirim gönder (aktif rolü isletme ise)
       console.log(`🔍 İşletme FCM Token alınıyor...`);
+      const businessActiveRole = await getUserActiveRole(businessId);
       const fcmToken = await getBusinessFcmToken(businessId);
       let businessResult = null;
-      if (fcmToken) {
+      if (businessActiveRole && businessActiveRole !== "isletme") {
+        console.log(`ℹ️ İşletme sahibi şu anda "${businessActiveRole}" modunda, bildirim gönderilmeyecek: ${businessId}`);
+      } else if (fcmToken) {
         console.log(`✅ İşletme FCM Token bulundu: ${fcmToken.substring(0, 20)}...`);
         console.log(`📤 FCM bildirimi gönderiliyor (işletmeye)...`);
         console.log(`📦 İşletmeye gönderilen payload:`, JSON.stringify(notificationPayload, null, 2));
@@ -568,8 +597,15 @@ exports.sendNewOrderNotificationToBusiness = functions.firestore
       if (staffList.length > 0) {
         console.log(`👥 ${staffList.length} garson bulundu, bildirim gönderiliyor...`);
 
-        // Her garsona bildirim gönder
+        // Her garsona bildirim gönder (aktif rolü garson ise)
         const staffNotificationPromises = staffList.map(async (staff) => {
+          // Garsonun aktif rolünü kontrol et
+          const staffActiveRole = await getUserActiveRole(staff.id);
+          if (staffActiveRole && staffActiveRole !== "garson") {
+            console.log(`ℹ️ Garson "${staff.nameSurname}" şu anda "${staffActiveRole}" modunda, bildirim gönderilmeyecek`);
+            return null;
+          }
+
           if (!staff.fcmToken || staff.fcmToken.trim() === "") {
             console.warn(`⚠️ Garson FCM Token bulunamadı: ${staff.id} (${staff.nameSurname})`);
             return null;
@@ -646,6 +682,13 @@ exports.sendNewCustomerRequestNotificationToBusiness = functions.firestore
       console.log(`🔍 Müşteri bilgileri alınıyor...`);
       const customerInfo = await getUserInfo(customerId);
       const customerName = customerInfo ? customerInfo.nameSurname : "";
+
+      // İşletme sahibinin aktif rolünü kontrol et
+      const bizActiveRole = await getUserActiveRole(businessId);
+      if (bizActiveRole && bizActiveRole !== "isletme") {
+        console.log(`ℹ️ İşletme sahibi şu anda "${bizActiveRole}" modunda, yeni müşteri isteği bildirimi gönderilmeyecek: ${businessId}`);
+        return null;
+      }
 
       // İşletmenin FCM token'ını al
       console.log(`🔍 İşletme FCM Token alınıyor...`);
